@@ -8,9 +8,12 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 const STAGE = '#0E0D0C', GOLD = '#C9A24A';
 
-export function start(canvas, host, { freezeAt = null } = {}) {
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: freezeAt !== null });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+// lite: phones/tablets — lower render resolution, lighter geometry, half-res bloom.
+// onSlow: called if the device can't hold a watchable frame rate, so the page can fall back to the poster.
+export function start(canvas, host, { freezeAt = null, lite = false, onSlow = null } = {}) {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: !lite, preserveDrawingBuffer: freezeAt !== null, powerPreference: lite ? 'low-power' : 'default' });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));   // 1x looked pixelated on 3x phone screens
+  const seg = lite ? .5 : 1;
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = .8;
   const scene = new THREE.Scene();
   const stage = new THREE.Color(STAGE);
@@ -20,7 +23,7 @@ export function start(canvas, host, { freezeAt = null } = {}) {
   const BAY = 5, LEN = 80, HALF = 8;
   const roofY = x => 6.4 - Math.abs(x) * .32;
   { // ceiling: pitched roof, fabric sagging between beams, pleats gathered toward each beam
-    const g = new THREE.PlaneGeometry(HALF * 2, LEN, 160, 400); g.rotateX(Math.PI / 2);
+    const g = new THREE.PlaneGeometry(HALF * 2, LEN, 160 * seg, 400 * seg); g.rotateX(Math.PI / 2);
     const p = g.attributes.position;
     for (let i = 0; i < p.count; i++) {
       const x = p.getX(i), z = p.getZ(i), f = ((z % BAY) + BAY) % BAY / BAY;
@@ -30,7 +33,7 @@ export function start(canvas, host, { freezeAt = null } = {}) {
     scene.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xf3ece2, roughness: .75, side: THREE.DoubleSide })));
   }
   [-1, 1].forEach(s => { // side drapes
-    const g = new THREE.PlaneGeometry(LEN, 5, 600, 30), p = g.attributes.position;
+    const g = new THREE.PlaneGeometry(LEN, 5, 600 * seg, 30 * seg), p = g.attributes.position;
     for (let i = 0; i < p.count; i++) { const u = p.getX(i), v = p.getY(i); p.setZ(i, Math.sin(u * 5) * .12 + Math.sin(u * 1.2566) * .05 * (v + 2.5)); }
     g.computeVertexNormals(); g.rotateY(s * Math.PI / 2); g.translate(s * HALF, 2.4, -LEN / 2 + 10);
     scene.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xece3d6, roughness: .8, side: THREE.DoubleSide })));
@@ -62,11 +65,13 @@ export function start(canvas, host, { freezeAt = null } = {}) {
 
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), .75, .5, .9));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), lite ? .65 : .75, .5, .9);
+  composer.addPass(bloom);
   composer.addPass(new OutputPass());
 
   const resize = () => {
     const w = host.clientWidth, h = host.clientHeight; renderer.setSize(w, h, false); composer.setSize(w, h);
+    if (lite) bloom.setSize(Math.round(w / 2), Math.round(h / 2));   // bloom is the costliest pass; half-res is invisible on a phone
     camera.aspect = w / h; camera.fov = w / h < 1 ? 78 : 62; camera.updateProjectionMatrix();
   };
   new ResizeObserver(resize).observe(host); resize();
@@ -84,8 +89,14 @@ export function start(canvas, host, { freezeAt = null } = {}) {
     if (!shown) { shown = true; canvas.classList.add('on'); }
   };
   if (freezeAt !== null) { z = 8 - freezeAt; frame(0, 0); return; }   // used once to render the static posters
-  const tick = now => { const dt = Math.min((now - last) / 1000, .05); last = now; frame(dt, now); if (visible && !document.hidden) raf = requestAnimationFrame(tick); };
-  const resume = () => { cancelAnimationFrame(raf); last = performance.now(); raf = requestAnimationFrame(tick); };
+  // frame-rate guard: after a short warm-up, average ~60 frames; under ~20fps we hand back to the poster
+  let n = 0, sum = 0, stopped = false;
+  const tick = now => {
+    const raw = (now - last) / 1000, dt = Math.min(raw, .05); last = now; frame(dt, now);
+    if (onSlow && n < 75) { n++; if (n > 15) sum += raw; if (n === 75 && sum / 60 > 1 / 20) { stopped = true; renderer.dispose(); onSlow(); return; } }
+    if (!stopped && visible && !document.hidden) raf = requestAnimationFrame(tick);
+  };
+  const resume = () => { if (stopped) return; cancelAnimationFrame(raf); last = performance.now(); raf = requestAnimationFrame(tick); };
   new IntersectionObserver(([e]) => { visible = e.isIntersecting; if (visible) resume(); }).observe(host);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && visible) resume(); });
   resume();

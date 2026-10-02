@@ -62,13 +62,16 @@
   </div>
 </section>
 <script type="module">
-  // Golden Canopy runs live only where it'll feel smooth; phones, Save-Data, reduced-motion and low-memory devices keep the poster (and never download three.js).
+  // Golden Canopy runs live on laptops AND phones (phones get a lighter render). The static poster is kept only for
+  // reduced-motion, Save-Data, very low-memory devices, no WebGL — or a phone that can't hold ~20fps once it's running.
   const hero = document.getElementById('hero'), canvas = hero.querySelector('canvas');
   const gl = (() => { try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch { return false; } })();
-  const rich = matchMedia('(min-width: 768px) and (pointer: fine)').matches && !matchMedia('(prefers-reduced-motion: reduce)').matches
-    && !(navigator.connection && navigator.connection.saveData) && (navigator.deviceMemory || 8) >= 4 && gl;
-  if (rich) import('./assets/canopy.js').then(m => m.start(canvas, hero)).catch(() => hero.classList.add('fallback'));
-  else hero.classList.add('fallback');
+  const lite = !matchMedia('(min-width: 768px) and (pointer: fine)').matches;
+  const ok = gl && !matchMedia('(prefers-reduced-motion: reduce)').matches
+    && !(navigator.connection && navigator.connection.saveData) && (navigator.deviceMemory || 4) >= 2;
+  const fallback = () => { canvas.classList.remove('on'); hero.classList.add('fallback'); };
+  if (ok) import('./assets/canopy.js').then(m => m.start(canvas, hero, { lite, onSlow: lite ? fallback : null })).catch(fallback);
+  else fallback();
 </script>
 <section class="proof" aria-label="Rahanie at a glance">
   <!-- follower/post counts read off the IG profile on 2 Oct 2026 — refresh before go-live. "2018" is from the founder's Facebook work entry (Jan 2018–present); worth a quick confirm. -->
